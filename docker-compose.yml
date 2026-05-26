@@ -68,7 +68,7 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__EXECUTOR: "SequentialExecutor"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "sqlite:////opt/airflow/airflow.db"
-      _PIP_ADDITIONAL_REQUIREMENTS: "pandas boto3 psycopg2-binary unidecode"
+      _PIP_ADDITIONAL_REQUIREMENTS: "pandas boto3 psycopg2-binary unidecode great_expectations"
       HOSPITAL_PG_HOST: postgres-hospital
       HOSPITAL_PG_PORT: "5432"
       HOSPITAL_PG_DB: hospital_db
