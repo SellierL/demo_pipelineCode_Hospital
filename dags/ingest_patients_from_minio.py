@@ -8,6 +8,7 @@ from datetime import datetime
 import boto3
 import pandas as pd
 import psycopg2
+import great_expectations as gx
 from airflow.decorators import dag, task
 from unidecode import unidecode
 
@@ -71,6 +72,85 @@ SERVICE_MAPPING = {
     "urgences": "Urgences",
 }
 
+def validate_age_distribution_with_gx(df: pd.DataFrame, file_name: str) -> None:
+    age_df = df.copy()
+
+    if "age" not in age_df.columns:
+        raise ValueError(f"[GX] colonne age absente dans {file_name}")
+
+    age_df["age"] = age_df["age"].apply(parse_age)
+
+    if age_df.empty:
+        raise ValueError(f"[GX] aucun âge valide à contrôler dans {file_name}")
+
+    context = gx.get_context(mode="ephemeral")
+
+    datasource = context.data_sources.add_pandas(
+        name=f"pandas_{normalize_key(file_name)}"
+    )
+
+    data_asset = datasource.add_dataframe_asset(
+        name=f"asset_{normalize_key(file_name)}"
+    )
+
+    batch_definition = data_asset.add_batch_definition_whole_dataframe(
+        name=f"batch_{normalize_key(file_name)}"
+    )
+
+    batch = batch_definition.get_batch(
+        batch_parameters={"dataframe": age_df}
+    )
+
+    expectation_suite = gx.ExpectationSuite(
+        name=f"age_suite_{normalize_key(file_name)}"
+    )
+
+    expectation_suite.add_expectation(
+        gx.expectations.ExpectColumnToExist(column="age")
+    )
+
+    expectation_suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToNotBeNull(column="age")
+    )
+
+    expectation_suite.add_expectation(
+        gx.expectations.ExpectColumnValuesToBeBetween(
+            column="age",
+            min_value=0,
+            max_value=130,
+        )
+    )
+
+    expectation_suite.add_expectation(
+        gx.expectations.ExpectColumnMeanToBeBetween(
+            column="age",
+            min_value=10,
+            max_value=90,
+        )
+    )
+
+    result = batch.validate(expectation_suite)
+
+    print(f"[GX] Résultat global pour {file_name}: success={result.success}")
+
+    for expectation_result in result.results:
+        expectation_type = expectation_result.expectation_config.type
+        success = expectation_result.success
+        result_details = expectation_result.result
+
+        print(f"[GX] expectation={expectation_type} success={success}")
+
+        if not success:
+            print(f"[GX] unexpected_count={result_details.get('unexpected_count')}")
+            print(f"[GX] unexpected_percent={result_details.get('unexpected_percent')}")
+            print(f"[GX] partial_unexpected_list={result_details.get('partial_unexpected_list')}")
+
+    if not result.success:
+        raise ValueError(
+            f"[GX] validation âge échouée pour {file_name}. Voir les logs GX ci-dessus."
+        )
+
+    print(f"[GX] validation âge réussie pour {file_name}")
 
 def parse_age(value: object) -> int | None:
     text = normalize_text(value).lower()
@@ -145,6 +225,8 @@ def ingest_patients_from_minio():
 
         df = read_csv_smart(raw)
         df.columns = [COLUMN_MAPPING.get(normalize_key(col), normalize_key(col)) for col in df.columns]
+
+        validate_age_distribution_with_gx(df, key)
 
         required_cols = {"nom", "prenom", "age", "pathologie", "service"}
         missing = required_cols - set(df.columns)
